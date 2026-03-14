@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Dataset (too large for git)
+datasets/LOL/train/
+datasets/LOL/test/
+
+# Model weights (too large for git - download or train)
+pretrained/*.pth
+*.pt
+
+# Results
+results/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+*.tmp
+*.log
+
+# Zen
+.zencoder/
+.zenflow/
