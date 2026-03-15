@@ -21,9 +21,8 @@ env/
 datasets/LOL/train/
 datasets/LOL/test/
 
-# Model weights (too large for git - download or train)
-pretrained/*.pth
-*.pt
+# Large model files (YOLOv8, etc.)
+yolov8*.pt
 
 # Results
 results/
