@@ -29,17 +29,31 @@ import config
 from models import EnhanceNet
 
 
+def _find_ffmpeg():
+    """Find ffmpeg: bundled imageio-ffmpeg first, then system PATH."""
+    try:
+        from imageio_ffmpeg import get_ffmpeg_exe
+        return get_ffmpeg_exe()
+    except ImportError:
+        pass
+    for cmd in ["ffmpeg", "ffmpeg.exe"]:
+        if shutil.which(cmd):
+            return cmd
+    return None
+
+
 def _reencode_to_h264(input_path, output_path):
     """
     Re-encode video to H.264 for browser/Streamlit compatibility.
     Tries ffmpeg → OpenCV H.264 codecs → mp4v fallback → copy original.
     Always produces an output file so the app never shows a blank player.
     """
-    # ── Try ffmpeg ────────────────────────────────────────────────────────────
-    for cmd in ["ffmpeg", "ffmpeg.exe"]:
+    # ── Try ffmpeg (bundled or system) ────────────────────────────────────────
+    ffmpeg_cmd = _find_ffmpeg()
+    if ffmpeg_cmd:
         try:
             result = subprocess.run(
-                [cmd, "-y", "-i", input_path,
+                [ffmpeg_cmd, "-y", "-i", input_path,
                  "-c:v", "libx264", "-preset", "fast",
                  "-crf", "23", "-pix_fmt", "yuv420p",
                  "-movflags", "+faststart", output_path],
@@ -49,7 +63,7 @@ def _reencode_to_h264(input_path, output_path):
                and os.path.getsize(output_path) > 0:
                 return True
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            continue
+            pass
 
     # ── Fallback: OpenCV re-encode ────────────────────────────────────────────
     cap = cv2.VideoCapture(input_path)
@@ -145,9 +159,17 @@ class VideoEnhancer:
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w = frame_rgb.shape[:2]
 
-        # Pad to multiple of 4
-        pad_w = (4 - w % 4) % 4
-        pad_h = (4 - h % 4) % 4
+        # Downscale large frames to prevent memory issues
+        max_dim = 1280
+        scale = 1.0
+        if max(h, w) > max_dim:
+            scale = max_dim / max(h, w)
+            frame_rgb = cv2.resize(frame_rgb, (int(w * scale), int(h * scale)))
+
+        # Pad to multiple of 4 (use current frame dimensions)
+        ch, cw = frame_rgb.shape[:2]
+        pad_w = (4 - cw % 4) % 4
+        pad_h = (4 - ch % 4) % 4
         if pad_w or pad_h:
             frame_rgb = np.pad(frame_rgb, ((0, pad_h), (0, pad_w), (0, 0)), mode='reflect')
 
@@ -168,12 +190,18 @@ class VideoEnhancer:
         # Apply curves
         enhanced_tensor, _ = self.model.apply_curves(input_tensor, curve_params)
 
-        # Convert back
-        enhanced = enhanced_tensor.squeeze(0).cpu().numpy().transpose(1, 2, 0)
-        enhanced = np.clip(enhanced * 255, 0, 255).astype(np.uint8)
+        # Convert back (in-place to avoid extra float32 allocation)
+        enhanced = enhanced_tensor.squeeze(0).cpu()
+        enhanced = enhanced.clamp_(0.0, 1.0).mul_(255).byte()
+        enhanced = enhanced.numpy().transpose(1, 2, 0)
 
-        # Remove padding
-        enhanced = enhanced[:h, :w, :]
+        # Remove padding (use downscaled dimensions)
+        dh, dw = (int(h * scale), int(w * scale)) if scale < 1.0 else (h, w)
+        enhanced = enhanced[:dh, :dw, :]
+
+        # Upscale back to original resolution if downscaled
+        if scale < 1.0:
+            enhanced = cv2.resize(enhanced, (w, h))
 
         # Denoise: bilateral filter (edge-preserving, compatible with all OpenCV versions)
         enhanced = cv2.bilateralFilter(enhanced, d=7, sigmaColor=50, sigmaSpace=50)
